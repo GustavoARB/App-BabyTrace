@@ -5,15 +5,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -27,7 +28,10 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun EnrutadorApp() {
-    var pantallaActual by remember { mutableStateOf("login") }
+    // Si ya hay una sesión activa en Firebase se entra directo a la pantalla principal
+    var pantallaActual by remember {
+        mutableStateOf(if (FirebaseAuth.getInstance().currentUser != null) "principal" else "login")
+    }
     var correoPreCargado by remember { mutableStateOf("") }
 
     BackHandler(enabled = pantallaActual == "registro") {
@@ -57,13 +61,29 @@ fun EnrutadorApp() {
     }
 }
 
+// Opciones del menú lateral, con los colores pastel de la identidad visual del documento
+private data class OpcionMenu(val ruta: String, val icono: String, val titulo: String, val color: Color)
+
+private val opcionesMenu = listOf(
+    OpcionMenu("inicio", "🏠", "Inicio", Color(0xFFE8F5E9)),
+    OpcionMenu("historial", "🥣", "Seguimiento de Sólidos", Color(0xFFE3F2FD)),
+    OpcionMenu("recetas", "📖", "Recetas Baby-Friendly", Color(0xFFE8F5E9)),
+    OpcionMenu("progreso", "📅", "Plan de Introducción", Color(0xFFFBE9E7)),
+    OpcionMenu("guia", "🔪", "Guía de Cortes", Color(0xFFFFF8E1)),
+    OpcionMenu("usuarios", "👨‍👩‍👧", "Comunidad de Padres", Color(0xFFFFF3E0))
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BabyTraceApp(onCerrarSesion: () -> Unit) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    // Un único listener de Firestore compartido por todas las pantallas
+    val datos = rememberDatosFamilia()
+
     var mostrarFormulario by remember { mutableStateOf(false) }
+    var registroEnEdicion by remember { mutableStateOf<RegistroComida?>(null) }
     var pestanaActual by remember { mutableStateOf("inicio") }
 
     var mostrarDialogoSalir by remember { mutableStateOf(false) }
@@ -101,40 +121,47 @@ fun BabyTraceApp(onCerrarSesion: () -> Unit) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet {
-                Text(
-                    text = "Menú BabyTrace",
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color(0xFF4CAF50)
-                )
-                HorizontalDivider()
+            ModalDrawerSheet(drawerContainerColor = Color.White) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFD7F2DE))
+                        .padding(vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("👶", style = MaterialTheme.typography.displayMedium)
+                    Text(datos.nombreBebe.ifEmpty { "BabyTrace" }, style = MaterialTheme.typography.titleLarge)
+                    Text("Nutrición para Mi Bebé", style = MaterialTheme.typography.bodyMedium, color = Color.DarkGray)
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                opcionesMenu.forEach { opcion ->
+                    NavigationDrawerItem(
+                        icon = { Text(opcion.icono, style = MaterialTheme.typography.titleLarge) },
+                        label = { Text(opcion.titulo) },
+                        selected = pestanaActual == opcion.ruta,
+                        onClick = {
+                            pestanaActual = opcion.ruta
+                            scope.launch { drawerState.close() }
+                        },
+                        colors = NavigationDrawerItemDefaults.colors(
+                            unselectedContainerColor = opcion.color,
+                            selectedContainerColor = Color(0xFFA5D6A7)
+                        ),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp)
+                    )
+                }
 
                 NavigationDrawerItem(
-                    label = { Text("Dashboard (Inicio)") },
-                    selected = pestanaActual == "inicio",
+                    icon = { Text("🚪", style = MaterialTheme.typography.titleLarge) },
+                    label = { Text("Cerrar Sesión") },
+                    selected = false,
                     onClick = {
-                        pestanaActual = "inicio"
-                        scope.launch { drawerState.close() }
-                    }
-                )
-
-                NavigationDrawerItem(
-                    label = { Text("Perfil Familiar (Usuarios)") },
-                    selected = pestanaActual == "usuarios",
-                    onClick = {
-                        pestanaActual = "usuarios"
-                        scope.launch { drawerState.close() }
-                    }
-                )
-
-                NavigationDrawerItem(
-                    label = { Text("Progreso de Alimentos") },
-                    selected = pestanaActual == "progreso",
-                    onClick = {
-                        pestanaActual = "progreso"
-                        scope.launch { drawerState.close() }
-                    }
+                        FirebaseAuth.getInstance().signOut()
+                        onCerrarSesion()
+                    },
+                    colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color(0xFFFBE9E7)),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp)
                 )
             }
         }
@@ -143,7 +170,7 @@ fun BabyTraceApp(onCerrarSesion: () -> Unit) {
             containerColor = Color(0xFFF4F6F8),
             topBar = {
                 TopAppBar(
-                    title = { Text("BabyTrace") },
+                    title = { Text(opcionesMenu.firstOrNull { it.ruta == pestanaActual }?.titulo?.takeIf { pestanaActual != "inicio" } ?: "BabyTrace") },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Text(text = "☰", style = MaterialTheme.typography.titleLarge)
@@ -152,9 +179,12 @@ fun BabyTraceApp(onCerrarSesion: () -> Unit) {
                 )
             },
             floatingActionButton = {
-                if (pestanaActual == "inicio" || pestanaActual == "progreso") {
+                if (pestanaActual in listOf("inicio", "historial", "progreso")) {
                     FloatingActionButton(
-                        onClick = { mostrarFormulario = true },
+                        onClick = {
+                            registroEnEdicion = null
+                            mostrarFormulario = true
+                        },
                         containerColor = Color(0xFF4CAF50),
                         contentColor = Color.White
                     ) {
@@ -165,22 +195,15 @@ fun BabyTraceApp(onCerrarSesion: () -> Unit) {
         ) { paddingValues ->
             Column(modifier = Modifier.padding(paddingValues)) {
                 when (pestanaActual) {
-                    "inicio" -> {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(16.dp)
-                        ) {
-                            Text("Bienvenido al perfil de tu bebé.", style = MaterialTheme.typography.titleMedium)
-                            Text("Hoy es un gran día para aprender a comer.", modifier = Modifier.padding(top = 8.dp))
-                        }
-                    }
-                    "usuarios" -> {
-                        PantallaUsuarios(onCerrarSesion = onCerrarSesion)
-                    }
-                    "progreso" -> {
-                        PantallaProgreso()
-                    }
+                    "inicio" -> PantallaInicio(datos)
+                    "historial" -> PantallaHistorial(datos, onEditar = { registro ->
+                        registroEnEdicion = registro
+                        mostrarFormulario = true
+                    })
+                    "recetas" -> PantallaRecetas(datos)
+                    "progreso" -> PantallaProgreso(datos)
+                    "guia" -> PantallaGuiaCortes(datos)
+                    "usuarios" -> PantallaUsuarios(onCerrarSesion = onCerrarSesion)
                 }
             }
         }
@@ -189,9 +212,13 @@ fun BabyTraceApp(onCerrarSesion: () -> Unit) {
     if (mostrarFormulario) {
         ModalBottomSheet(
             onDismissRequest = { mostrarFormulario = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = Color.White
         ) {
-            FormularioAlimento(onCerrar = { mostrarFormulario = false })
+            // key: reinicia el estado del formulario al cambiar de registro
+            key(registroEnEdicion?.id) {
+                FormularioAlimento(datos = datos, registroExistente = registroEnEdicion, onCerrar = { mostrarFormulario = false })
+            }
         }
     }
 }
