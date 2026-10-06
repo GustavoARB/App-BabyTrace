@@ -112,7 +112,7 @@ fun PantallaRegistro(
                 ExposedDropdownMenuBox(expanded = menuGenero, onExpandedChange = { menuGenero = !menuGenero }) {
                     OutlinedTextField(
                         value = generoBebe, onValueChange = {}, readOnly = true, label = { Text("Género") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuGenero) }, modifier = Modifier.menuAnchor().fillMaxWidth()
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuGenero) }, modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable).fillMaxWidth()
                     )
                     ExposedDropdownMenu(expanded = menuGenero, onDismissRequest = { menuGenero = false }) {
                         opcionesGenero.forEach { seleccion ->
@@ -130,7 +130,7 @@ fun PantallaRegistro(
             ExposedDropdownMenuBox(expanded = menuParentesco, onExpandedChange = { menuParentesco = !menuParentesco }) {
                 OutlinedTextField(
                     value = parentesco, onValueChange = {}, readOnly = true, label = { Text("Parentesco / Rol") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuParentesco) }, modifier = Modifier.menuAnchor().fillMaxWidth()
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuParentesco) }, modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable).fillMaxWidth()
                 )
                 ExposedDropdownMenu(expanded = menuParentesco, onDismissRequest = { menuParentesco = false }) {
                     opcionesParentesco.forEach { seleccion ->
@@ -149,57 +149,75 @@ fun PantallaRegistro(
                 Button(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
-                        cargando = true
                         val cor = correo.trim()
                         val pass = contrasena.trim()
                         val codigoInvitacion = codigoFamilia.trim()
 
+                        val mensajeValidacion = when {
+                            !crearNuevaFamilia && codigoInvitacion.length != 6 -> "El código de invitación debe tener 6 caracteres"
+                            crearNuevaFamilia && nombreBebe.isBlank() -> "Ingresa el nombre del bebé"
+                            crearNuevaFamilia && fechaNacimiento.isEmpty() -> "Selecciona la fecha de nacimiento"
+                            crearNuevaFamilia && generoBebe.isEmpty() -> "Selecciona el género del bebé"
+                            nombre.isBlank() -> "Ingresa tu nombre"
+                            parentesco.isEmpty() -> "Selecciona tu parentesco"
+                            !android.util.Patterns.EMAIL_ADDRESS.matcher(cor).matches() -> "Ingresa un correo válido"
+                            pass.length < 6 -> "La contraseña debe tener al menos 6 caracteres"
+                            else -> null
+                        }
+                        if (mensajeValidacion != null) {
+                            Toast.makeText(contexto, mensajeValidacion, Toast.LENGTH_LONG).show()
+                            return@Button
+                        }
+
+                        cargando = true
+                        val onError: (Exception) -> Unit = { e ->
+                            cargando = false
+                            Toast.makeText(contexto, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+
                         if (!crearNuevaFamilia) {
-                            db.collection("Usuarios").whereEqualTo("codigoInvitacion", codigoInvitacion).get()
-                                .addOnSuccessListener { docs ->
-                                    if (docs.isEmpty) {
-                                        Toast.makeText(contexto, "El código no existe o es incorrecto", Toast.LENGTH_LONG).show()
-                                        cargando = false
-                                        return@addOnSuccessListener
-                                    }
+                            // Se crea la cuenta primero para que la consulta del código se haga ya autenticado
+                            auth.createUserWithEmailAndPassword(cor, pass).addOnSuccessListener { res ->
+                                val usuario = res.user!!
+                                val cancelarRegistro: (String) -> Unit = { mensaje ->
+                                    usuario.delete()
+                                    cargando = false
+                                    Toast.makeText(contexto, mensaje, Toast.LENGTH_LONG).show()
+                                }
 
-                                    val rolesTomados = docs.mapNotNull { it.getString("parentesco") }
-                                    if (rolesTomados.contains(parentesco)) {
-                                        Toast.makeText(contexto, "El rol de $parentesco ya está ocupado en esta familia", Toast.LENGTH_LONG).show()
-                                        cargando = false
-                                        return@addOnSuccessListener
-                                    }
+                                db.collection("Usuarios").whereEqualTo("codigoInvitacion", codigoInvitacion).get()
+                                    .addOnSuccessListener { docs ->
+                                        if (docs.isEmpty) {
+                                            cancelarRegistro("El código no existe o es incorrecto")
+                                            return@addOnSuccessListener
+                                        }
 
-                                    val docCreador = docs.documents[0]
-                                    val idFamiliaOculto = docCreador.getString("familiaId") ?: ""
+                                        val rolesTomados = docs.mapNotNull { it.getString("parentesco") }
+                                        if (rolesTomados.contains(parentesco)) {
+                                            cancelarRegistro("El rol de $parentesco ya está ocupado en esta familia")
+                                            return@addOnSuccessListener
+                                        }
 
-                                    val bbNom = docCreador.getString("nombreBebe") ?: ""
-                                    val bbMeses = docCreador.getLong("edadBebeMeses") ?: 0
-                                    val bbGen = docCreador.getString("generoBebe") ?: ""
-
-                                    auth.createUserWithEmailAndPassword(cor, pass).addOnSuccessListener { res ->
+                                        val docCreador = docs.documents[0]
                                         val datos = hashMapOf(
-                                            "nombreBebe" to bbNom,
-                                            "edadBebeMeses" to bbMeses,
-                                            "generoBebe" to bbGen,
-                                            "nombre" to nombre,
+                                            "nombreBebe" to (docCreador.getString("nombreBebe") ?: ""),
+                                            "edadBebeMeses" to (docCreador.getLong("edadBebeMeses") ?: 0),
+                                            "generoBebe" to (docCreador.getString("generoBebe") ?: ""),
+                                            "nombre" to nombre.trim(),
                                             "parentesco" to parentesco,
                                             "correo" to cor,
                                             "rol" to "Lector/Editor",
-                                            "familiaId" to idFamiliaOculto,
+                                            "familiaId" to (docCreador.getString("familiaId") ?: ""),
                                             "codigoInvitacion" to codigoInvitacion
                                         )
-                                        db.collection("Usuarios").document(res.user!!.uid).set(datos).addOnSuccessListener { onRegistroExitoso() }
+                                        db.collection("Usuarios").document(usuario.uid).set(datos)
+                                            .addOnSuccessListener { onRegistroExitoso() }
+                                            .addOnFailureListener { e -> cancelarRegistro("Error: ${e.message}") }
                                     }
-                                }
+                                    .addOnFailureListener { e -> cancelarRegistro("Error: ${e.message}") }
+                            }.addOnFailureListener(onError)
                         } else {
-                            var edadMeses = 0
-                            if (fechaNacimiento.isNotEmpty()) {
-                                val partes = fechaNacimiento.split("/")
-                                val nacimiento = Calendar.getInstance().apply { set(partes[2].toInt(), partes[1].toInt() - 1, partes[0].toInt()) }
-                                val hoy = Calendar.getInstance()
-                                edadMeses = (hoy.get(Calendar.YEAR) - nacimiento.get(Calendar.YEAR)) * 12 + (hoy.get(Calendar.MONTH) - nacimiento.get(Calendar.MONTH))
-                            }
+                            val edadMeses = calcularEdadMeses(fechaNacimiento) ?: 0
 
                             val caracteres = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
                             val nuevoCodigoCorto = (1..6).map { caracteres.random() }.joinToString("")
@@ -211,15 +229,17 @@ fun PantallaRegistro(
                                     "edadBebeMeses" to edadMeses,
                                     "fechaNacimiento" to fechaNacimiento,
                                     "generoBebe" to generoBebe,
-                                    "nombre" to nombre,
+                                    "nombre" to nombre.trim(),
                                     "parentesco" to parentesco,
                                     "correo" to cor,
                                     "rol" to "Administrador",
                                     "familiaId" to nuevoId,
                                     "codigoInvitacion" to nuevoCodigoCorto
                                 )
-                                db.collection("Usuarios").document(nuevoId).set(datos).addOnSuccessListener { onRegistroExitoso() }
-                            }
+                                db.collection("Usuarios").document(nuevoId).set(datos)
+                                    .addOnSuccessListener { onRegistroExitoso() }
+                                    .addOnFailureListener(onError)
+                            }.addOnFailureListener(onError)
                         }
                     }
                 ) { Text(if (crearNuevaFamilia) "Registrar Familia" else "Unirme a la Familia") }
